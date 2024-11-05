@@ -1,53 +1,46 @@
 # Build stage
 FROM node:18-alpine AS builder
 
-# Set working directory
 WORKDIR /app
 
-# Copy package files
+# Copy package files for dependency installation
 COPY package*.json ./
-
-# Install dependencies
 RUN npm ci
 
-# Copy source code
+# Copy source files and run tests
 COPY . .
+RUN npm test && npm prune --production
 
-# Run tests
-RUN npm test
+# Final stage
+FROM node:18-alpine
 
-# Production stage
-FROM gcr.io/kaniko-project/executor:latest AS kaniko
+WORKDIR /app
 
-# Set workspace
-WORKDIR /workspace
-
-# Copy built application from builder
-COPY --from=builder /app .
-
-# Build arguments for Kaniko
-ENV DOCKER_CONFIG=/kaniko/.docker
-
-# Create empty Docker config if not exists
+# Create docker config directory first
 RUN mkdir -p /kaniko/.docker && \
-    echo '{"auths": {}}' > /kaniko/.docker/config.json
+    echo '{"auths":{}}' > /kaniko/.docker/config.json && \
+    chmod 600 /kaniko/.docker/config.json
 
-# Kaniko build command
-FROM scratch
+# Copy built application
+COPY --from=builder /app/src ./src
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package*.json ./
 
-# Copy application files
-COPY --from=builder /app/src /app/src
-COPY --from=builder /app/package*.json /app/
-
-# Runtime configuration
+# Set environment variables
 ENV NODE_ENV=production
 ENV PORT=3000
+ENV DOCKER_CONFIG=/kaniko/.docker
+
+# Security settings
+RUN addgroup -g 1001 nodejs && \
+    adduser -u 1001 -G nodejs -s /bin/sh -D nodejs && \
+    chown -R nodejs:nodejs /app /kaniko
 
 # Expose port
 EXPOSE 3000
 
-# Use non-root user
-USER 65532:65532
+# Switch to non-root user
+USER nodejs
 
-# Start command
-CMD ["node", "/app/src/index.js"]
+# Start application
+CMD ["node", "src/index.js"]
