@@ -1,36 +1,43 @@
 # Build stage
-FROM gcr.io/kaniko-project/executor:latest AS builder
+FROM node:18-alpine AS builder
 
 # Set working directory
-WORKDIR /workspace
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm ci
 
 # Copy source code
 COPY . .
 
-# Configure Kaniko cache and credentials
-ENV DOCKER_CONFIG /kaniko/.docker/
-COPY config.json /kaniko/.docker/
+# Run tests
+RUN npm test
 
-# Build arguments
-ARG TARGETARCH
-ARG BUILDPLATFORM
+# Production stage
+FROM gcr.io/kaniko-project/executor:latest AS kaniko
 
-# Build the application with Kaniko
+# Set workspace
+WORKDIR /workspace
+
+# Copy built application from builder
+COPY --from=builder /app .
+
+# Build arguments for Kaniko
+ENV DOCKER_CONFIG=/kaniko/.docker
+
+# Create empty Docker config if not exists
+RUN mkdir -p /kaniko/.docker && \
+    echo '{"auths": {}}' > /kaniko/.docker/config.json
+
+# Kaniko build command
 FROM scratch
-COPY --from=builder /workspace/src /app/src
-COPY --from=builder /workspace/package*.json /app/
 
-# Kaniko specific build commands
-RUN /kaniko/executor \
-    --context=/workspace \
-    --dockerfile=Dockerfile \
-    --destination=your-registry/nodejs-app:latest \
-    --reproducible \
-    --use-new-run \
-    --single-snapshot \
-    --skip-unused-stages \
-    --snapshotMode=full \
-    --verbosity=info
+# Copy application files
+COPY --from=builder /app/src /app/src
+COPY --from=builder /app/package*.json /app/
 
 # Runtime configuration
 ENV NODE_ENV=production
@@ -39,8 +46,8 @@ ENV PORT=3000
 # Expose port
 EXPOSE 3000
 
-# Set user to non-root
+# Use non-root user
 USER 65532:65532
 
-# Start the application
+# Start command
 CMD ["node", "/app/src/index.js"]
